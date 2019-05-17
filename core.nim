@@ -142,6 +142,9 @@ proc released*(core: Core, key: KeyCode): bool {.inline.} = core.justUp[ord(key)
 
 #graphics
 
+proc `$`*(core: Core, name: string): Tex = 
+    return core.atlas.getOrDefault(name, core.atlas["error"])
+
 proc createAtlas*(core: Core, name: string) =
     let atlasTex = core.renderer.loadTexture(name & ".png")
     let map = loadAtlas(name & ".atlas")
