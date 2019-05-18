@@ -1,7 +1,7 @@
 import os, strformat
 
 const
-  app = "main"
+  app = "fourspire"
   version = "1.0"
 
   builds = [
@@ -29,7 +29,7 @@ for name, os, cpu, args in builds.items:
   if execShellCmd(fmt"nim --cpu:{cpu} --os:{os} {args} -d:release -o:{bin} c {app}") != 0: quit 1
   if execShellCmd(fmt"strip -s {bin}") != 0: quit 1
   if execShellCmd(fmt"upx --best {bin}") != 0: quit 1
-  copyDir("data", dir / "data")
+  #copyDir("data", dir / "data") #data isn't needed right now
   if os == "windows": copyDir("libs" / name, dir)
   setCurrentDir "builds"
   if os == "windows":

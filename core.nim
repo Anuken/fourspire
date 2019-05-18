@@ -1,14 +1,39 @@
-import sdl2, sdl2/image, atlas, tables
+import sdl2, sdl2/image, tables, parseutils, streams, strutils
+
+const assetsFolder = "assets/"
 
 # INTERNALS
+
+#IO
+
+template staticReadRW(filename: string): ptr RWops =
+    const file = staticRead(filename)
+    rwFromConstMem(file.cstring, file.len)
+  
+template staticReadStream(filename: string): string =
+    const file = staticRead(filename)
+    newStringStream(file)
+
+template staticReadString(filename: string): string = 
+    const str = staticRead(filename)
+    str
 
 #math
 
 #TODO should this be kept...?
-type vec2* = object
+type Vec2* = object
     x, y: float32
 
 #graphics
+
+#defines a color
+type Col* = object
+    r*, g*, b*, a*: uint8
+
+#converts a hex string to a color
+export parseHexInt
+template `%`*(str: string): Col =
+    Col(r: str[0..1].parseHexInt().uint8, g: str[2..3].parseHexInt().uint8, b: str[4..5].parseHexInt().uint8, a: 255)
 
 type Camera* = ref object
     x, y, w, h: float32
@@ -60,6 +85,7 @@ type Core* = ref object
     renderer: RendererPtr
     cam*: Camera
     atlas: Table[string, Tex]
+    clearColor*: Col
 
     #core loop stuff
     running: bool
@@ -80,8 +106,11 @@ proc beginUpdate(core: Core) =
         else:
             discard
 
-    #clear screen with the default color
+    core.renderer.setDrawColor(core.clearColor.r, core.clearColor.g, core.clearColor.b, core.clearColor.a)
+    #clear screen with the specified clear color
     core.renderer.clear()
+    #reset to default color now
+    core.renderer.setDrawColor(1, 1, 1, 1)
     
 
 proc endUpdate(core: Core) = 
@@ -111,8 +140,9 @@ proc initCore*(initProc: proc(core: Core), loopProc: proc(core: Core), windowWid
     defer: image.quit()
 
     let core = Core(window: window, renderer: renderer, running: true)
+    core.cam = Camera(x: 0, y: 0, w: 0, h: 0)
+    core.clearColor = Col(r: 0, g: 0, b: 0, a: 255)
     
-    renderer.setDrawColor(0, 0, 0)
     initProc(core)
 
     while core.running:
@@ -120,6 +150,7 @@ proc initCore*(initProc: proc(core: Core), loopProc: proc(core: Core), windowWid
         loopProc(core)
         core.endUpdate()
 
+#stops the game, does not quit immediately
 proc quit*(core: Core) = core.running = false
 
 #input
@@ -142,25 +173,55 @@ proc released*(core: Core, key: KeyCode): bool {.inline.} = core.justUp[ord(key)
 
 #graphics
 
+proc `color=`*(core: Core, value: Col) {.inline.} =
+    core.renderer.setDrawColor(value.r, value.g, value.b, value.a)
+
+#returns a texture region by name
 proc `$`*(core: Core, name: string): Tex = 
     return core.atlas.getOrDefault(name, core.atlas["error"])
 
-proc createAtlas*(core: Core, name: string) =
-    let atlasTex = core.renderer.loadTexture(name & ".png")
-    let map = loadAtlas(name & ".atlas")
+#parse an atlas from a string
+proc loadAtlas(atlas: string): Table[string, tuple[x: int, y: int, w: int, h: int]] =
+    result = initTable[string, tuple[x: int, y: int, w: int, h: int]]()
+    let lines = splitLines(atlas)
+    var index = 6
+
+    while index < lines.len - 1:
+        #name of region
+        var key = lines[index]
+        index += 2
+        #xy
+        var numbers = lines[index]
+        var x, y : int
+        var xyoffset = "  xy: ".len
+        xyoffset += numbers.parseInt(x, xyoffset)
+        discard numbers.parseInt(y, xyoffset + 2)
+        index += 1
+
+        #size
+        var sizes = lines[index]
+        var width, height : int
+        var sizeoffset = "  size: ".len
+        sizeoffset += sizes.parseInt(width, sizeoffset)
+        discard sizes.parseInt(height, sizeoffset + 2)
+        index += 4
+
+        result[key] = (x, y, width, height)
+
+#loads 'sprites.atlas' into the core
+#TODO: remove and load implicitly
+proc createAtlas*(core: Core) =
+    let atlasTex = core.renderer.loadTextureRW(staticReadRW(assetsFolder & "sprites.png"), freesrc = 1)
+    let map = loadAtlas(staticReadString(assetsFolder & "sprites.atlas"))
+    core.atlas = initTable[string, Tex]()
     for key, val in map.pairs:
         core.atlas[key] = Tex(texture: atlasTex, region: rect(val.x.cint, val.y.cint, val.w.cint, val.h.cint))
     
-proc draw*(core: Core, tex: Tex, x: float32, y: float32, w: float32 = tex.w.toFloat, h: float32 = tex.h.toFloat, rotation: float32 = 0) = 
-    #[
-    if rotation == 0.0 and not flipx and not flipy:
-        #simple copy, no rotation or flip
-        var r1 = tex.region
-        var r2 = rect((x - w/2.0).cint, (y - h/2.0).cint, w.cint, h.cint)
-        core.renderer.copy(tex.texture, r1.addr, r2.addr)
-    else:]#
-    #advanced copyEx stuff
+proc draw*(core: Core, tex: Tex, x: float32, y: float32, w: float32 = 0, h: float32 = 0, rotation: float32 = 0) = 
+    #this sets up default values for w/h if not provided; 0 mean 'use tex size'
+    var fw = if w == 0: tex.w.toFloat else: w
+    var fh = if h == 0: tex.h.toFloat else: h
     var r1 = tex.region
-    var r2 =  rect((x - w/2.0 + core.cam.x + core.screen.w/2).cint, (-y - h/2.0 + core.cam.y + core.screen.h/2).cint, w.cint, h.cint)
-    var p = point(w/2.0, h/2.0)
+    var r2 =  rect((x - fw/2.0 + core.cam.x + core.screen.w/2).cint, (-y - fh/2.0 + core.cam.y + core.screen.h/2).cint, fw.cint, fh.cint)
+    var p = point(fw/2.0, fh/2.0)
     core.renderer.copyEx(tex.texture, r1, r2, angle = rotation, center = p.addr, flip = SDL_FLIP_NONE)
